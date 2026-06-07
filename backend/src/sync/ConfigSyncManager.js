@@ -1,5 +1,6 @@
 import { LWWJSONConfig } from '../crdt/LWWMap.js';
 import { v4 as uuidv4 } from 'uuid';
+import { EventEmitter } from 'events';
 
 const DEFAULT_CONFIG = {
   editor: {
@@ -39,13 +40,17 @@ const DEFAULT_CONFIG = {
   }
 };
 
-export class ConfigSyncManager {
+export class ConfigSyncManager extends EventEmitter {
   constructor(p2pNode, nodeId) {
+    super();
     this.p2pNode = p2pNode;
     this.nodeId = nodeId;
     this.config = new LWWJSONConfig(nodeId);
     this.pendingSyncRequests = new Map();
     this.messageHandlers = new Map();
+    this.snapshots = new Map();
+    this.subscriptions = new Map();
+    this.conflicts = new Map();
     
     this.config.setConfig(DEFAULT_CONFIG);
     
@@ -97,7 +102,21 @@ export class ConfigSyncManager {
       return;
     }
 
+    if (!this.isOperationAllowed(operation, from)) {
+      console.log(`[Sync] Operation filtered by subscription: ${operation.key} from ${from}`);
+      return;
+    }
+
     console.log(`[Sync] Received operation from ${from}: ${operation.type} ${operation.key}`);
+    
+    const { key, value, timestamp, author } = operation;
+    
+    const conflict = this.detectConflict(key, null, value, author, timestamp);
+    
+    if (conflict) {
+      console.log(`[Sync] Conflict detected for key: ${operation.key}`);
+      return;
+    }
     
     const applied = this.config.applyOperation(operation);
     
@@ -106,6 +125,30 @@ export class ConfigSyncManager {
     } else {
       console.log(`[Sync] Operation rejected (outdated): ${operation.key}`);
     }
+  }
+
+  matchNamespace(key, pattern) {
+    if (pattern === '*') {
+      return true;
+    }
+    
+    const regexPattern = pattern
+      .split('.')
+      .map(part => part === '*' ? '[^.]+' : part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+      .join('\\.');
+    
+    const regex = new RegExp(`^${regexPattern}$`);
+    return regex.test(key);
+  }
+
+  isOperationAllowed(operation, peerId) {
+    const subscription = this.subscriptions.get(peerId);
+    if (!subscription) {
+      return true;
+    }
+
+    const { key } = operation;
+    return subscription.namespaces.some(pattern => this.matchNamespace(key, pattern));
   }
 
   sendFullConfigRequest(peerId) {
@@ -189,8 +232,13 @@ export class ConfigSyncManager {
     console.log(`[Sync] Received ${operations.length} operations from ${from}`);
     
     for (const op of operations) {
-      if (op.author !== this.nodeId) {
-        this.config.applyOperation(op);
+      if (op.author !== this.nodeId && this.isOperationAllowed(op, from)) {
+        const { key, value, timestamp, author } = op;
+        const conflict = this.detectConflict(key, null, value, author, timestamp);
+        
+        if (!conflict) {
+          this.config.applyOperation(op);
+        }
       }
     }
   }
@@ -211,8 +259,7 @@ export class ConfigSyncManager {
     return this.config.getConfig();
   }
 
-  updateKey(path, value) {
-    const timestamp = Date.now();
+  updateKey(path, value, timestamp = Date.now()) {
     return this.config.setKey(path, value, timestamp);
   }
 
@@ -265,5 +312,189 @@ export class ConfigSyncManager {
 
   getNodeId() {
     return this.nodeId;
+  }
+
+  createSnapshot(name, description = '') {
+    const snapshot = {
+      id: uuidv4(),
+      name,
+      description,
+      config: JSON.parse(JSON.stringify(this.getConfig())),
+      crdtState: this.config.toJSON(),
+      createdAt: Date.now(),
+      nodeId: this.nodeId
+    };
+
+    this.snapshots.set(snapshot.id, snapshot);
+    this.emit('snapshot-created', snapshot);
+    return snapshot;
+  }
+
+  getSnapshots() {
+    return Array.from(this.snapshots.values()).sort((a, b) => b.createdAt - a.createdAt);
+  }
+
+  getSnapshot(id) {
+    return this.snapshots.get(id) || null;
+  }
+
+  rollbackToSnapshot(id) {
+    const snapshot = this.snapshots.get(id);
+    if (!snapshot) {
+      throw new Error(`Snapshot ${id} not found`);
+    }
+
+    const previousConfig = this.getConfig();
+    this.config = LWWJSONConfig.fromJSON(snapshot.crdtState, this.nodeId);
+    this.config.nodeId = this.nodeId;
+    
+    this.config.onChange((change) => {
+      this.broadcastOperation(change);
+    });
+    
+    const rollbackInfo = {
+      snapshotId: id,
+      snapshotName: snapshot.name,
+      previousConfig,
+      newConfig: this.getConfig(),
+      rolledBackAt: Date.now()
+    };
+
+    this.emit('snapshot-rolled-back', rollbackInfo);
+    this.emit('config-change', { type: 'rollback', config: this.getConfig() });
+    return rollbackInfo;
+  }
+
+  deleteSnapshot(id) {
+    const snapshot = this.snapshots.get(id);
+    if (!snapshot) {
+      throw new Error(`Snapshot ${id} not found`);
+    }
+    this.snapshots.delete(id);
+    return true;
+  }
+
+  subscribe(peerId, namespaces = ['*']) {
+    if (!peerId) {
+      throw new Error('peerId is required');
+    }
+
+    if (!Array.isArray(namespaces) || namespaces.length === 0) {
+      throw new Error('namespaces must be a non-empty array');
+    }
+
+    const subscription = {
+      peerId,
+      namespaces,
+      subscribedAt: Date.now()
+    };
+
+    this.subscriptions.set(peerId, subscription);
+    this.emit('subscription-created', subscription);
+    return subscription;
+  }
+
+  unsubscribe(peerId) {
+    if (!this.subscriptions.has(peerId)) {
+      throw new Error(`Subscription for peer ${peerId} not found`);
+    }
+    this.subscriptions.delete(peerId);
+    return true;
+  }
+
+  getSubscriptions() {
+    return Array.from(this.subscriptions.values());
+  }
+
+  detectConflict(key, localValue, remoteValue, remoteAuthor, remoteTimestamp) {
+    const localEntry = this.config.crdt.map.get(key);
+    if (!localEntry) return null;
+
+    if (remoteTimestamp === localEntry.timestamp && 
+        JSON.stringify(localEntry.value) !== JSON.stringify(remoteValue)) {
+      const conflict = {
+        id: uuidv4(),
+        key,
+        localValue: localEntry.value,
+        remoteValue,
+        localAuthor: localEntry.author,
+        remoteAuthor,
+        timestamp: remoteTimestamp,
+        detectedAt: Date.now(),
+        resolved: false
+      };
+
+      this.conflicts.set(conflict.id, conflict);
+      this.emit('conflict-detected', conflict);
+      return conflict;
+    }
+
+    return null;
+  }
+
+  getConflicts() {
+    return Array.from(this.conflicts.values()).filter(c => !c.resolved);
+  }
+
+  resolveConflict(key, choice, customValue) {
+    const conflict = Array.from(this.conflicts.values())
+      .find(c => c.key === key && !c.resolved);
+    
+    if (!conflict) {
+      throw new Error(`No unresolved conflict for key ${key}`);
+    }
+
+    let resolvedValue;
+    switch (choice) {
+      case 'local':
+        resolvedValue = conflict.localValue;
+        break;
+      case 'remote':
+        resolvedValue = conflict.remoteValue;
+        break;
+      case 'custom':
+        if (customValue === undefined) {
+          throw new Error('customValue is required for custom choice');
+        }
+        resolvedValue = customValue;
+        break;
+      default:
+        throw new Error(`Invalid choice: ${choice}. Must be local, remote, or custom`);
+    }
+
+    this.updateKey(key, resolvedValue);
+    
+    conflict.resolved = true;
+    conflict.resolvedAt = Date.now();
+    conflict.resolvedBy = this.nodeId;
+    conflict.resolvedChoice = choice;
+    conflict.resolvedValue = resolvedValue;
+
+    this.emit('conflict-resolved', conflict);
+    return conflict;
+  }
+
+  resolveAllConflicts(choice) {
+    if (!['local', 'remote'].includes(choice)) {
+      throw new Error(`Invalid choice: ${choice}. Must be local or remote`);
+    }
+
+    const unresolvedConflicts = this.getConflicts();
+    const results = [];
+
+    for (const conflict of unresolvedConflicts) {
+      try {
+        const resolved = this.resolveConflict(conflict.key, choice);
+        results.push({ key: conflict.key, success: true, conflict: resolved });
+      } catch (e) {
+        results.push({ key: conflict.key, success: false, error: e.message });
+      }
+    }
+
+    return {
+      total: unresolvedConflicts.length,
+      resolved: results.filter(r => r.success).length,
+      results
+    };
   }
 }

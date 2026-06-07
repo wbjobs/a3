@@ -34,4 +34,24 @@ export const healthApi = {
   getHealth: () => api.get('/health'),
 };
 
+export const snapshotApi = {
+  createSnapshot: (name, description) => api.post('/config/snapshots', { name, description }),
+  getSnapshots: () => api.get('/config/snapshots'),
+  getSnapshot: (id) => api.get(`/config/snapshots/${id}`),
+  rollbackToSnapshot: (id) => api.post(`/config/snapshots/${id}/rollback`),
+  deleteSnapshot: (id) => api.delete(`/config/snapshots/${id}`),
+};
+
+export const subscriptionApi = {
+  subscribeToPeer: (peerId, namespaces) => api.post('/subscriptions', { peerId, namespaces }),
+  getSubscriptions: () => api.get('/subscriptions'),
+  unsubscribeFromPeer: (peerId) => api.delete(`/subscriptions/${peerId}`),
+};
+
+export const conflictApi = {
+  getConflicts: () => api.get('/conflicts'),
+  resolveConflict: (key, choice, customValue) => api.post(`/conflicts/${key}/resolve`, { choice, customValue }),
+  resolveAllConflicts: (choice) => api.post('/conflicts/resolve-all', { choice }),
+};
+
 export default api;

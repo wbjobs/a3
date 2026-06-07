@@ -1,17 +1,31 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import './App.css';
-import { Server, Wifi, WifiOff } from './components/Icons';
+import { Server, Wifi, WifiOff, AlertTriangle, Camera, Rss, GitBranch } from './components/Icons';
 import NodeTopology from './components/NodeTopology';
 import ConfigEditor from './components/ConfigEditor';
 import ConfigHistory from './components/ConfigHistory';
+import SnapshotManager from './components/SnapshotManager';
+import SubscriptionManager from './components/SubscriptionManager';
+import ConflictResolver from './components/ConflictResolver';
 import { nodeApi } from './services/api';
 import { wsService } from './services/websocket';
+
+const TABS = [
+  { id: 'editor', label: 'Editor', icon: GitBranch },
+  { id: 'snapshots', label: 'Snapshots', icon: Camera },
+  { id: 'subscriptions', label: 'Subscriptions', icon: Rss },
+  { id: 'conflicts', label: 'Conflicts', icon: AlertTriangle },
+  { id: 'history', label: 'History', icon: GitBranch },
+  { id: 'topology', label: 'Topology', icon: Server },
+];
 
 function App() {
   const [nodeInfo, setNodeInfo] = useState(null);
   const [wsConnected, setWsConnected] = useState(false);
   const [toast, setToast] = useState(null);
   const [peerCount, setPeerCount] = useState(0);
+  const [activeTab, setActiveTab] = useState('editor');
+  const [conflictCount, setConflictCount] = useState(0);
 
   const showToast = useCallback(({ type, message }) => {
     setToast({ type, message, id: Date.now() });
@@ -48,6 +62,9 @@ function App() {
         wsService.requestTopology();
         wsService.requestConfig();
         wsService.requestHistory(100);
+        wsService.requestSnapshots();
+        wsService.requestSubscriptions();
+        wsService.requestConflicts();
       });
       
       wsService.on('disconnected', () => {
@@ -69,6 +86,43 @@ function App() {
         });
         setPeerCount(prev => Math.max(0, prev - 1));
       });
+
+      wsService.on('conflict-detected', (data) => {
+        showToast({
+          type: 'warning',
+          message: `New conflict detected: ${data.conflict?.key}`
+        });
+        setConflictCount(prev => prev + 1);
+      });
+
+      wsService.on('conflict-resolved', (data) => {
+        showToast({
+          type: 'success',
+          message: `Conflict resolved: ${data.conflict?.key}`
+        });
+        setConflictCount(prev => Math.max(0, prev - 1));
+      });
+
+      wsService.on('snapshot-created', (data) => {
+        showToast({
+          type: 'success',
+          message: `Snapshot created: ${data.snapshot?.name}`
+        });
+      });
+
+      wsService.on('snapshot-rolled-back', (data) => {
+        showToast({
+          type: 'info',
+          message: `Rolled back to: ${data.snapshotName}`
+        });
+      });
+
+      wsService.on('subscription-created', (data) => {
+        showToast({
+          type: 'success',
+          message: `Subscribed to ${data.peerId?.slice(0, 12)}...`
+        });
+      });
     } catch (e) {
       console.error('Error connecting WebSocket:', e);
       setWsConnected(false);
@@ -78,6 +132,34 @@ function App() {
   const handleToast = useCallback(({ type, message }) => {
     showToast({ type, message });
   }, [showToast]);
+
+  const handleConflictCountChange = useCallback((count) => {
+    setConflictCount(count);
+  }, []);
+
+  const renderTabContent = () => {
+    switch (activeTab) {
+      case 'editor':
+        return <ConfigEditor onToast={handleToast} />;
+      case 'snapshots':
+        return <SnapshotManager onToast={handleToast} />;
+      case 'subscriptions':
+        return <SubscriptionManager onToast={handleToast} />;
+      case 'conflicts':
+        return (
+          <ConflictResolver 
+            onToast={handleToast} 
+            onConflictCountChange={handleConflictCountChange}
+          />
+        );
+      case 'history':
+        return <ConfigHistory />;
+      case 'topology':
+        return <NodeTopology />;
+      default:
+        return <ConfigEditor onToast={handleToast} />;
+    }
+  };
 
   return (
     <div className="app">
@@ -94,6 +176,12 @@ function App() {
           </div>
         </div>
         <div className="header-right">
+          {conflictCount > 0 && (
+            <div className="conflict-badge" title={`${conflictCount} unresolved conflicts`}>
+              <AlertTriangle size={16} style={{ color: '#f59e0b' }} />
+              <span>{conflictCount}</span>
+            </div>
+          )}
           <div className="status-indicator">
             <span className={`status-dot ${wsConnected ? '' : 'error'}`} />
             {wsConnected ? (
@@ -116,10 +204,30 @@ function App() {
         </div>
       </header>
 
+      <nav className="app-tabs">
+        {TABS.map(tab => {
+          const Icon = tab.icon;
+          const isActive = activeTab === tab.id;
+          const showBadge = tab.id === 'conflicts' && conflictCount > 0;
+          
+          return (
+            <button
+              key={tab.id}
+              className={`tab-btn ${isActive ? 'active' : ''}`}
+              onClick={() => setActiveTab(tab.id)}
+            >
+              <Icon size={16} />
+              <span>{tab.label}</span>
+              {showBadge && (
+                <span className="tab-badge">{conflictCount}</span>
+              )}
+            </button>
+          );
+        })}
+      </nav>
+
       <main className="app-main">
-        <NodeTopology />
-        <ConfigEditor onToast={handleToast} />
-        <ConfigHistory />
+        {renderTabContent()}
       </main>
 
       {toast && (

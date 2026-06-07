@@ -81,6 +81,18 @@ export class WebSocketService {
     this.send('request-history', { limit });
   }
 
+  requestSnapshots() {
+    this.send('request-snapshots');
+  }
+
+  requestSubscriptions() {
+    this.send('request-subscriptions');
+  }
+
+  requestConflicts() {
+    this.send('request-conflicts');
+  }
+
   on(event, callback) {
     if (!this.listeners.has(event)) {
       this.listeners.set(event, new Set());

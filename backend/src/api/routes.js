@@ -174,5 +174,198 @@ export function createRoutes(p2pNode, syncManager, wsManager) {
     });
   });
 
+  router.post('/config/snapshots', (req, res) => {
+    try {
+      const { name, description } = req.body;
+      
+      if (!name) {
+        return res.status(400).json({ error: 'name is required' });
+      }
+      
+      const snapshot = syncManager.createSnapshot(name, description);
+      
+      res.status(201).json({
+        success: true,
+        snapshot
+      });
+    } catch (e) {
+      res.status(400).json({ error: e.message });
+    }
+  });
+
+  router.get('/config/snapshots', (req, res) => {
+    try {
+      const snapshots = syncManager.getSnapshots();
+      res.json({ snapshots });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  router.get('/config/snapshots/:id', (req, res) => {
+    try {
+      const { id } = req.params;
+      const snapshot = syncManager.getSnapshot(id);
+      
+      if (!snapshot) {
+        return res.status(404).json({ error: 'Snapshot not found' });
+      }
+      
+      res.json({ snapshot });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  router.post('/config/snapshots/:id/rollback', (req, res) => {
+    try {
+      const { id } = req.params;
+      const rollbackInfo = syncManager.rollbackToSnapshot(id);
+      
+      res.json({
+        success: true,
+        ...rollbackInfo
+      });
+    } catch (e) {
+      if (e.message.includes('not found')) {
+        res.status(404).json({ error: e.message });
+      } else {
+        res.status(400).json({ error: e.message });
+      }
+    }
+  });
+
+  router.delete('/config/snapshots/:id', (req, res) => {
+    try {
+      const { id } = req.params;
+      const success = syncManager.deleteSnapshot(id);
+      
+      res.json({
+        success,
+        id
+      });
+    } catch (e) {
+      if (e.message.includes('not found')) {
+        res.status(404).json({ error: e.message });
+      } else {
+        res.status(400).json({ error: e.message });
+      }
+    }
+  });
+
+  router.post('/subscriptions', (req, res) => {
+    try {
+      const { peerId, namespaces } = req.body;
+      
+      if (!peerId) {
+        return res.status(400).json({ error: 'peerId is required' });
+      }
+      
+      if (namespaces !== undefined && !Array.isArray(namespaces)) {
+        return res.status(400).json({ error: 'namespaces must be an array' });
+      }
+      
+      const subscription = syncManager.subscribe(peerId, namespaces || ['*']);
+      
+      res.status(201).json({
+        success: true,
+        subscription
+      });
+    } catch (e) {
+      res.status(400).json({ error: e.message });
+    }
+  });
+
+  router.get('/subscriptions', (req, res) => {
+    try {
+      const subscriptions = syncManager.getSubscriptions();
+      res.json({ subscriptions });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  router.delete('/subscriptions/:peerId', (req, res) => {
+    try {
+      const { peerId } = req.params;
+      const success = syncManager.unsubscribe(peerId);
+      
+      res.json({
+        success,
+        peerId
+      });
+    } catch (e) {
+      if (e.message.includes('not found')) {
+        res.status(404).json({ error: e.message });
+      } else {
+        res.status(400).json({ error: e.message });
+      }
+    }
+  });
+
+  router.get('/conflicts', (req, res) => {
+    try {
+      const conflicts = syncManager.getConflicts();
+      res.json({ conflicts });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  router.post('/conflicts/:key/resolve', (req, res) => {
+    try {
+      const { key } = req.params;
+      const { choice, customValue } = req.body;
+      
+      if (!choice) {
+        return res.status(400).json({ error: 'choice is required' });
+      }
+      
+      if (!['local', 'remote', 'custom'].includes(choice)) {
+        return res.status(400).json({ error: 'choice must be local, remote, or custom' });
+      }
+      
+      if (choice === 'custom' && customValue === undefined) {
+        return res.status(400).json({ error: 'customValue is required for custom choice' });
+      }
+      
+      const conflict = syncManager.resolveConflict(key, choice, customValue);
+      
+      res.json({
+        success: true,
+        conflict
+      });
+    } catch (e) {
+      if (e.message.includes('not found')) {
+        res.status(404).json({ error: e.message });
+      } else {
+        res.status(400).json({ error: e.message });
+      }
+    }
+  });
+
+  router.post('/conflicts/resolve-all', (req, res) => {
+    try {
+      const { choice } = req.body;
+      
+      if (!choice) {
+        return res.status(400).json({ error: 'choice is required' });
+      }
+      
+      if (!['local', 'remote'].includes(choice)) {
+        return res.status(400).json({ error: 'choice must be local or remote' });
+      }
+      
+      const result = syncManager.resolveAllConflicts(choice);
+      
+      res.json({
+        success: true,
+        ...result
+      });
+    } catch (e) {
+      res.status(400).json({ error: e.message });
+    }
+  });
+
   return router;
 }

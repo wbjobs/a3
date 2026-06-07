@@ -123,6 +123,41 @@ async function main() {
     });
   });
 
+  syncManager.on('conflict-detected', (conflict) => {
+    wsManager.broadcast({
+      type: 'conflict-detected',
+      payload: { conflict }
+    });
+  });
+
+  syncManager.on('conflict-resolved', (conflict) => {
+    wsManager.broadcast({
+      type: 'conflict-resolved',
+      payload: { conflict }
+    });
+  });
+
+  syncManager.on('snapshot-created', (snapshot) => {
+    wsManager.broadcast({
+      type: 'snapshot-created',
+      payload: { snapshot }
+    });
+  });
+
+  syncManager.on('snapshot-rolled-back', (rollbackInfo) => {
+    wsManager.broadcast({
+      type: 'snapshot-rolled-back',
+      payload: rollbackInfo
+    });
+  });
+
+  syncManager.on('subscription-created', (subscription) => {
+    wsManager.broadcast({
+      type: 'subscription-created',
+      payload: { subscription }
+    });
+  });
+
   p2pNode.on('peerConnected', (peerId) => {
     wsManager.broadcast({
       type: 'peer-connected',
@@ -184,6 +219,33 @@ async function main() {
       type: 'history-update',
       payload: {
         history: syncManager.getHistory(limit)
+      }
+    });
+  });
+
+  wsManager.on('request-subscriptions', (clientId) => {
+    wsManager.sendToClient(clientId, {
+      type: 'subscriptions-update',
+      payload: {
+        subscriptions: syncManager.getSubscriptions()
+      }
+    });
+  });
+
+  wsManager.on('request-snapshots', (clientId) => {
+    wsManager.sendToClient(clientId, {
+      type: 'snapshots-update',
+      payload: {
+        snapshots: syncManager.getSnapshots()
+      }
+    });
+  });
+
+  wsManager.on('request-conflicts', (clientId) => {
+    wsManager.sendToClient(clientId, {
+      type: 'conflicts-update',
+      payload: {
+        conflicts: syncManager.getConflicts()
       }
     });
   });
