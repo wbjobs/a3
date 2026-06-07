@@ -13,6 +13,16 @@ import { toString as uint8ArrayToString } from 'uint8arrays/to-string';
 const CONFIG_SYNC_PROTOCOL = '/p2p-config-sync/1.0.0';
 const CONFIG_TOPIC = 'p2p-config-sync';
 
+const DEFAULT_BOOTSTRAP_PEERS = [
+  '/dnsaddr/bootstrap.libp2p.io/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN',
+  '/dnsaddr/bootstrap.libp2p.io/p2p/QmQCU2EcMqAqQPR2i9bChDtGNJchTbq5TbXJJ16u19uLTa',
+  '/dnsaddr/bootstrap.libp2p.io/p2p/QmbLHAnMoJPWSCR5Zhtx6BHJX9KiKNN6tpvbUcqanj75Nb',
+  '/dnsaddr/bootstrap.libp2p.io/p2p/QmcZf59bWwK5XFi76CZX8cbJ4BhTzzA3gU1ZjYZcYW3dwt',
+  '/ip4/104.131.131.82/tcp/4001/p2p/QmaCpDMGvV2BGHeYERUEnRQAwe3N8SzbUtfsmvsqQLuvuJ',
+  '/ip4/104.236.176.52/tcp/4001/p2p/QmSoLPppuBtQSGwKDZT2M73ULpjvfd3aZ6ha4oFGL1KrGM',
+  '/ip4/178.62.158.247/tcp/4001/p2p/QmSoLer265NRgSp2LA3dPaeykiS1J6DifTC88f5uVQKNAd'
+];
+
 export async function createP2PNode(options = {}) {
   const {
     p2pPort = 4001,
@@ -21,10 +31,19 @@ export async function createP2PNode(options = {}) {
     enableDHT = true
   } = options;
 
+  const finalBootstrapPeers = bootstrapPeers.length > 0 
+    ? bootstrapPeers 
+    : DEFAULT_BOOTSTRAP_PEERS;
+
   const peerDiscovery = [];
 
-  if (bootstrapPeers.length > 0) {
-    peerDiscovery.push(bootstrap({ list: bootstrapPeers }));
+  if (finalBootstrapPeers.length > 0) {
+    try {
+      peerDiscovery.push(bootstrap({ list: finalBootstrapPeers }));
+    } catch (e) {
+      console.error('[P2P] Failed to initialize bootstrap:', e.message);
+      console.log('[P2P] Continuing without bootstrap nodes, using MDNS only');
+    }
   }
 
   if (enableMdns) {
@@ -230,6 +249,10 @@ export async function createP2PNode(options = {}) {
     const requestHandler = listeners.messageReceived;
     requestHandler.forEach(cb => cb({ type: 'full-config-request' }, peerId));
   });
+
+  if (finalBootstrapPeers.length > 0) {
+    console.log(`[P2P] Bootstrap configured with ${finalBootstrapPeers.length} peers`);
+  }
 
   return {
     node,

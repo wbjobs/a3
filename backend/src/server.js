@@ -53,6 +53,12 @@ async function main() {
     bootstrapPeers = ['/ip4/127.0.0.1/tcp/4001/p2p/QmQCU2EcMqAqQPR2i9bChDtGNJchTbq5TbXJJ16u19uLTa'];
   }
 
+  if (bootstrapPeers.length > 0 && bootstrapPeers[0].includes('QmQCU2EcMqAqQPR2i9bChDtGNJchTbq5TbXJJ16u19uLTa')) {
+    console.log('[WARN] Using placeholder bootstrap peer ID. For real network connectivity, specify valid bootstrap peers with --bootstrap flag.');
+    console.log('[INFO] When --peer flag is used without --bootstrap, it attempts to connect to a local node on port 4001.');
+    console.log('[INFO] For public DHT connectivity, run without --peer flag to use default bootstrap nodes.');
+  }
+
   console.log('='.repeat(60));
   console.log('P2P Config Sync Backend');
   console.log('='.repeat(60));

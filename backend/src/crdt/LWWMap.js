@@ -249,9 +249,35 @@ export class LWWJSONConfig {
     const flatConfig = this.flattenObject(config, '');
     const changedEntries = [];
 
+    const existingKeys = this.crdt.keys();
+    const newKeys = Object.keys(flatConfig);
+
+    const keysToDelete = existingKeys.filter(key => !newKeys.includes(key));
+
+    for (const key of keysToDelete) {
+      const deleted = this.crdt.delete(key, timestamp, this.nodeId);
+      if (deleted) {
+        changedEntries.push({
+          key,
+          value: null,
+          timestamp,
+          author: this.nodeId,
+          type: 'delete'
+        });
+      }
+    }
+
     for (const [key, value] of Object.entries(flatConfig)) {
-      const entry = this.crdt.set(key, value, timestamp, this.nodeId);
-      if (entry) changedEntries.push(entry);
+      const currentValue = this.crdt.get(key);
+      const currentEntry = this.crdt.map.get(key);
+      
+      if (currentEntry && currentEntry.deleted) {
+        const entry = this.crdt.set(key, value, timestamp, this.nodeId);
+        if (entry) changedEntries.push(entry);
+      } else if (JSON.stringify(currentValue) !== JSON.stringify(value)) {
+        const entry = this.crdt.set(key, value, timestamp, this.nodeId);
+        if (entry) changedEntries.push(entry);
+      }
     }
 
     return changedEntries;
